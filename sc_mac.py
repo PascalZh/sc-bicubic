@@ -4,6 +4,7 @@ import random
 import pylfsr
 import numpy as np
 import tqdm
+import os
 
 
 def gen_rand_seq(x, seq_len, bit_width=8):
@@ -18,6 +19,31 @@ def gen_rand_seq(x, seq_len, bit_width=8):
         seq[i] = 1 if sn < x else 0
 
     return seq
+
+
+class RandSeqReader:
+    start = 0
+
+    def __init__(self, filename):
+        self.filename = filename
+        self.f = open(filename, 'rb')
+
+    def gen_rand_seq(self, x, seq_len, bit_width=8):
+        assert bit_width % 8 == 0
+        seq = np.zeros(seq_len, dtype=np.uint32)
+
+        # get file size
+        file_size = os.path.getsize(self.filename)
+        self.f.seek(self.start)
+        self.start = (self.start + 13) % (file_size - seq_len)
+
+        for i in range(seq_len):
+            sn = int.from_bytes(self.f.read(bit_width // 8), byteorder='big')
+            seq[i] = 1 if sn < x else 0
+        return seq
+
+    def __del__(self):
+        self.f.close()
 
 
 def sc_mac(xs, ws, gen_rand_seq):
@@ -50,16 +76,13 @@ def sc_mac(xs, ws, gen_rand_seq):
     return np.sum(p_seq) / seq_len * 4
 
 
-def sc_mult(a, b, gen_rand_seq):
-    seq_len = 1024
-    bit_width = 10
-    a_seq = gen_rand_seq(int(a * 2**bit_width), seq_len, bit_width)
-    b_seq = gen_rand_seq(int(b * 2**bit_width), seq_len, bit_width)
+def sc_mult(a, b, gen, bit_width=8, seq_len=1024):
+    a_seq = gen(int(a * 2**bit_width), seq_len, bit_width)
+    b_seq = gen(int(b * 2**bit_width), seq_len, bit_width)
 
     p_seq = np.zeros(seq_len, dtype=np.uint32)
 
-    for i in range(seq_len):
-        p_seq[i] = a_seq[i] & b_seq[i]
+    p_seq = a_seq & b_seq
 
     return np.sum(p_seq) / seq_len
 
@@ -67,36 +90,39 @@ def sc_mult(a, b, gen_rand_seq):
 def test_mac():
     MAE = 0
     N = 10
-    for i in tqdm.tqdm(range(N)):
+    for _ in tqdm.tqdm(range(N)):
         xs = np.random.uniform(0, 1, 4)
         ws = np.random.uniform(0, 1, 4)
         sc_mac_result = sc_mac(xs, ws, gen_rand_seq)
         mac_result = np.dot(xs, ws)
-        # print(
-        #     f"{sc_mac_result=}, {mac_result=}, AE={abs(sc_mac_result - mac_result):.3f}"
-        # )
         MAE += abs(sc_mac_result - mac_result)
     print(f"MAE={MAE / N:.3f}")
 
 
-def test_mult():
+def test_mult(N, gen):
     MAE = 0
-    N = 100
-    for i in tqdm.tqdm(range(N)):
+    bit_width = 8
+    for _ in tqdm.tqdm(range(N)):
         a = np.random.uniform(0, 1)
         b = np.random.uniform(0, 1)
-        sc_mult_result = sc_mult(a, b, gen_rand_seq)
-        mult_result = a * b
-        # print(
-        #     f"{sc_mult_result=}, {mult_result=}, AE={abs(sc_mult_result - mult_result):.3f}"
-        # )
+        sc_mult_result = sc_mult(a, b, gen, bit_width=bit_width, seq_len=1024)
+
+        mult_result = int(a * 2**bit_width) * int(
+            b * 2**bit_width) / 2**(bit_width * 2)
         MAE += abs(sc_mult_result - mult_result)
 
     print(f"MAE={MAE / N:.3f}")
 
 
 def main():
-    test_mult()
+    N = 1000
+
+    filename = r"D:\0_data\physical_rng\cuibing_processed_CH1tra01.bin"
+    # filename = r"D:\0_data\physical_rng\cuibing_raw_tra_01.bin"
+    # filename = r"D:\0_data\physical_rng\cuibing_raw_CH1tra01.bin"
+
+    test_mult(N, gen_rand_seq)
+    test_mult(N, RandSeqReader(filename).gen_rand_seq)
 
 
 if __name__ == '__main__':
